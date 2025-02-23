@@ -2,4 +2,3 @@ Flask
 pandas
 scikit-learn
 numpy
-glob

@@ -1,25 +1,48 @@
 <html>
-<head>
-    <title>Previsão de Acessos</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-        }
-        h1 {
-            color: #333;
-        }
-        form {
-            margin-bottom: 20px;
-        }
-        .result {
-            margin-top: 20px;
-            padding: 10px;
-            border: 1px solid #ddd;
-            background-color: #f9f9f9;
-        }
-    </style>
-</head>
+    <head>
+        <title>Previsão de Acessos</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                margin: 20px;
+                background-color: #f4f4f9;
+            }
+            h1 {
+                color: #2c3e50;
+                text-align: center;
+            }
+            form {
+                background: #ffffff;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+                margin-bottom: 20px;
+                text-align: center;
+            }
+            .result {
+                margin-top: 20px;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+                background-color: #ffffff;
+            }
+            .access-list {
+                padding: 10px;
+                border-radius: 5px;
+                background: #ecf0f1;
+                text-align: center;
+                font-size: 18px;
+                font-weight: bold;
+                color: #2c3e50;
+            }
+            .no-results {
+                text-align: center;
+                font-size: 18px;
+                color: red;
+                margin-top: 20px;
+            }
+        </style>
+    </head>
 <body>
     <h1>Prever Acessos Futuros</h1>
     <form method="POST" action="/predict">
@@ -29,23 +52,51 @@
         <label for="limit">Limite de Previsões:</label>
         <input type="number" id="limit" name="limit" min="1" max="100" value="10">
         
-        <button type="submit">Enviar</button>
+        <label for="modelo">Escolha o modelo:</label>
+        <select id="modelo" name="modelo">
+            <option value="both">Ambos</option>
+            <option value="random_forest">Random Forest</option>
+            <option value="kmeans">K-Means</option>
+        </select>
+        
+        <button type="submit">Executar Previsões</button>
     </form>
-
-    <form action="/random_predict" method="post">
-        <button type="submit">Prever para UserId Aleatório</button>
+    
+    <form method="POST" action="/predict">
+        <input type="hidden" id="userId" name="userId" value="random">
+        
+        <label for="limit">Limite de Previsões:</label>
+        <input type="number" id="limit" name="limit" min="1" max="100" value="10">
+        
+        <label for="modelo">Escolha o modelo:</label>
+        <select id="modelo" name="modelo">
+            <option value="both">Ambos</option>
+            <option value="random_forest">Random Forest</option>
+            <option value="kmeans">K-Means</option>
+        </select>
+        
+        <button type="submit">Executar Aleatório</button>
     </form>
-
+    
     <div class="result">
         {% if futuros_acessos %}
             <h2>Futuros Acessos para UserId: {{ userId }}</h2>
-            <ul>
-                {% for acesso in futuros_acessos %}
-                    <li>{{ acesso }}</li>
-                {% endfor %}
-            </ul>
-        {% elif error %}
-            <p style="color: red;">{{ error }}</p>
+            {% for resultado in futuros_acessos %}
+                <h3>Modelo: {{ resultado['modelo'] }}</h3>
+                {% if resultado['acessos'] %}
+                    <div class="access-list">Próximos acessos: 
+                        <ul>
+                            {% for acesso in resultado['acessos'] %}
+                                <li>{{ acesso }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                {% else %}
+                    <p class="no-results">Nenhum resultado encontrado.</p>
+                {% endif %}
+            {% endfor %}
+        {% else %}
+            <p class="no-results">Nenhum resultado encontrado.</p>
         {% endif %}
     </div>
 </body>

@@ -1,45 +1,22 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request
 import os
 import pandas as pd
 import random
+import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.cluster import KMeans
+from sklearn.metrics import precision_score, recall_score, f1_score
 import glob
 
 app = Flask(__name__)
 
-# Variáveis globais para os dados
 df_merged = None
-scaler = None
-model = None
+scaler = StandardScaler()
 
-def load_training_data_antigo(train_dir):
-    train_df = pd.DataFrame()
-    for filename in os.listdir(train_dir):
-        if filename.startswith('treino_parte') and filename.endswith('.csv'):
-            file_path = os.path.join(train_dir, filename)
-            df = pd.read_csv(file_path)
-            train_df = pd.concat([train_df, df], ignore_index=True)
-    return train_df
-
-def load_items_data_antigo(items_dir):
-    items_df = pd.DataFrame()
-    for filename in os.listdir(items_dir):
-        if filename.startswith('itens-parte') and filename.endswith('.csv'):
-            file_path = os.path.join(items_dir, filename)
-            df = pd.read_csv(file_path)
-            items_df = pd.concat([items_df, df], ignore_index=True)
-    return items_df
-
-def carregar_dados_treino(diretorio_treino):
-    arquivos_treino = glob.glob(os.path.join(diretorio_treino, '*.csv'))
-    treino_df = pd.concat((pd.read_csv(arquivo) for arquivo in arquivos_treino), ignore_index=True)
-    return treino_df
-
-def carregar_dados_itens(diretorio_itens):
-    arquivos_itens = glob.glob(os.path.join(diretorio_itens, '*.csv'))
-    itens_df = pd.concat((pd.read_csv(arquivo) for arquivo in arquivos_itens), ignore_index=True)
-    return itens_df
+def carregar_dados(diretorio):
+    arquivos = glob.glob(os.path.join(diretorio, '*.csv'))
+    return pd.concat((pd.read_csv(arquivo) for arquivo in arquivos), ignore_index=True)
 
 def initialize_data():
     """Carrega e processa os dados de treino e itens."""
@@ -47,66 +24,80 @@ def initialize_data():
     train_dir = 'arquivos_divididos_treino/'
     items_dir = 'arquivos_divididos_itens/'
 
-    items_df = carregar_dados_itens(items_dir)
-    train_df = carregar_dados_treino(train_dir)
+    items_df = carregar_dados(items_dir)
+    train_df = carregar_dados(train_dir)
     train_df = train_df[train_df['userType'] == 'Logged']
 
-    # Processar colunas
-    columns_to_explode = ['history', "scrollPercentageHistory", "timeOnPageHistory", 
-                          'timestampHistory', 'pageVisitsCountHistory', "numberOfClicksHistory", 'timestampHistory_new']
+    columns_to_explode = ['history', 'scrollPercentageHistory', 'timeOnPageHistory', 
+                          'timestampHistory', 'pageVisitsCountHistory', 'numberOfClicksHistory']
     for col in columns_to_explode:
         train_df[col] = train_df[col].apply(lambda x: x.split(', ') if isinstance(x, str) else [])
 
     df_exploded = train_df.explode(columns_to_explode, ignore_index=True)
-    df_merged = pd.merge(df_exploded, items_df, left_on="history", right_on="page", how="left").drop(columns="history")
+    df_merged = pd.merge(df_exploded, items_df, left_on='history', right_on='page', how='left').drop(columns='history')
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
+def make_prediction(userId, limit, modelo):
+    user_data = df_merged[df_merged['userId'] == userId]
+    if user_data.empty:
+        return render_template('index.html', userId=userId, futuros_acessos=[])
+
+    resultados = []
+
+    if modelo in ['random_forest', 'both']:
+        user_data = user_data.sort_values(by='timestampHistory', ascending=True)
+        user_data['next_page'] = user_data['page'].shift(-1)
+        user_data = user_data.dropna(subset=['next_page'])
+
+        X = user_data[['timeOnPageHistory', 'numberOfClicksHistory', 'scrollPercentageHistory']]
+        y = user_data['next_page']
+        
+    if modelo in ['random_forest', 'both']:
+        user_data = user_data.sort_values(by='timestampHistory', ascending=True)
+        user_data['next_page'] = user_data['page'].shift(-1)
+        user_data = user_data.dropna(subset=['next_page'])
+
+        X = user_data[['timeOnPageHistory', 'numberOfClicksHistory', 'scrollPercentageHistory']]
+        y = user_data['next_page']
+        
+        if not X.empty:
+            X_scaled = scaler.fit_transform(X)
+            model = RandomForestClassifier(n_estimators=100, random_state=42)
+            model.fit(X_scaled, y)
+            predictions = model.predict(X_scaled)
+            resultados.append({"modelo": "Random Forest", "acessos": list(predictions[:limit])})
+
+    if modelo in ['kmeans', 'both']:
+        X = user_data[['timeOnPageHistory', 'numberOfClicksHistory', 'scrollPercentageHistory']]
+        if not X.empty:
+            X_scaled = scaler.fit_transform(X)
+            kmeans = KMeans(n_clusters=min(len(X), 5), random_state=42, n_init=10)
+            user_data['cluster'] = kmeans.fit_predict(X_scaled)
+            df_merged.loc[user_data.index, 'cluster'] = user_data['cluster']
+            cluster = user_data.iloc[-1]['cluster']
+            common_pages = df_merged[df_merged['cluster'] == cluster]['page'].value_counts().index[:limit]
+            resultados.append({"modelo": "K-Means", "acessos": list(common_pages)})
+    
+    return render_template('index.html', userId=userId, futuros_acessos=resultados)
+
 @app.route('/predict', methods=['POST'])
 def predict():
     userId = request.form['userId']
-    limit = int(request.form.get('limit', 10))  # Limite de previsões
-    return make_prediction(userId, limit)
+    if userId == 'random':
+        userId = random.choice(df_merged['userId'].unique())
+    limit = int(request.form.get('limit', 10))
+    return make_prediction(userId, limit, request.form.get('modelo'))
 
-@app.route('/random_predict', methods=['POST'])
-def random_predict():
-    if df_merged is not None:
-        random_userId = random.choice(df_merged['userId'].unique())
-        limit = int(request.form.get('limit', 10))  # Limite de previsões
-        return make_prediction(random_userId, limit)
-    return render_template('index.html', error="Erro ao gerar UserId aleatório.")
-
-def make_prediction(userId, limit):
-    user_data = df_merged[df_merged['userId'] == userId]
-
-    if user_data.empty:
-        return render_template('index.html', userId=userId, futuros_acessos=["Sem dados suficientes"])
-
-    user_data = user_data.sort_values(by='timestampHistory', ascending=True)
-    user_data['next_page'] = user_data['page'].shift(-1)  # Próxima página como alvo
-    user_data = user_data.dropna(subset=['next_page'])
-
-    pages = user_data['page'].unique()
-    for page in pages:
-        user_data[f'visited_{page}'] = user_data['page'].apply(lambda x: 1 if x == page else 0)
-
-    X = user_data[['historySize', 'timeOnPageHistory', 'numberOfClicksHistory', 
-                   'scrollPercentageHistory'] + [f'visited_{page}' for page in pages]]
-    y = user_data['next_page']
-
-    if X.empty:
-        return render_template('index.html', userId=userId, futuros_acessos=["Sem dados suficientes"])
-
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_scaled, y)
-
-    predictions = model.predict(X_scaled)
-    return render_template('index.html', userId=userId, futuros_acessos=list(predictions[:limit]))
+@app.route('/predict_all', methods=['POST'])
+def predict_all():
+    userId = request.form['userId']
+    if userId == 'random':
+        userId = random.choice(df_merged['userId'].unique())
+    limit = int(request.form.get('limit', 10))
+    return make_prediction(userId, limit,request.form.get('modelo'))
 
 if __name__ == '__main__':
     initialize_data()
